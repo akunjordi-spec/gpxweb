@@ -8,7 +8,6 @@ import requests
 st.set_page_config(page_title="Game Office Pro Manager", layout="wide", page_icon="🏢")
 
 # --- 2. CONFIG DISCORD WEBHOOK (AMAN) ---
-# Pastikan sudah setting di Streamlit Cloud Settings > Secrets
 try:
     DISCORD_WEBHOOK_URL = st.secrets["MY_WEBHOOK_URL"]
 except:
@@ -141,10 +140,6 @@ if menu == "📊 Dashboard":
         else:
             st.info("Belum ada data pengambilan bibit.")
 
-    st.write("---")
-    st.subheader("💰 Total Saldo Tersimpan")
-    st.dataframe(st.session_state.members[['Nama', 'Total Uang']].sort_values(by="Total Uang", ascending=False), use_container_width=True, hide_index=True)
-
 # --- MENU: INPUT MEMBER ---
 elif menu == "📝 Input Member":
     st.title("📝 Form Input Member")
@@ -158,7 +153,7 @@ elif menu == "📝 Input Member":
             q = cols[i % 3].number_input(f"Jumlah {item}", min_value=0, key=f"inp_{item}", step=1)
             if q > 0:
                 detail_setor.append(f"{item}:{q}")
-                rincian_struk.append(f"{item}: {q}")
+                rincian_struk.append(f"{item} : {q:,}")
                 total_nom += (q * prc)
         
         sisa_b = st.number_input("Bibit Sisa yang Dikembalikan", min_value=0)
@@ -167,8 +162,17 @@ elif menu == "📝 Input Member":
                 new_t = pd.DataFrame([{'ID': datetime.now().timestamp(), 'User': m_name, 'Tipe': 'SETOR', 'Detail': ",".join(detail_setor), 'TotalNominal': total_nom, 'SisaBibit': sisa_b, 'Status': 'Pending', 'Waktu': datetime.now().strftime("%d/%m %H:%M"), 'FullTimestamp': datetime.now()}])
                 st.session_state.pending_tasks = pd.concat([st.session_state.pending_tasks, new_t], ignore_index=True)
                 save_all()
-                send_to_discord(f"📩 **LAPORAN SETORAN BARU: {m_name}**\nTotal: Rp {total_nom:,}")
+                
+                # FORMAT PESAN SESUAI PERMINTAAN
+                tgl = datetime.now().strftime("%d/%m/%y")
+                pesan_discord = f"**SETORAN {tgl}**\n\n"
+                pesan_discord += f"**{m_name}**\n"
+                pesan_discord += "\n".join(rincian_struk) + "\n"
+                pesan_discord += f"**TOTAL : {total_nom:,}**"
+                
+                send_to_discord(pesan_discord)
                 st.success("Laporan terkirim!")
+                st.code(pesan_discord, language="text")
             else: st.warning("Input barang dulu!")
 
     with t2:
@@ -197,7 +201,9 @@ elif menu == "✅ Approval & Bayar":
                             n_i, q_i = item_data.split(":")
                             st.session_state.stok_gudang[n_i] = st.session_state.stok_gudang.get(n_i, 0) + int(q_i)
                         st.session_state.members.at[midx, 'Total Uang'] += row['TotalNominal']
-                        send_to_discord(f"✅ **TERBAYARKAN** kepada **{row['User']}** sebesar **Rp {row['TotalNominal']:,}**")
+                        
+                        pesan_bayar = f"✅ **SUDAH DIBAYAR**\nKepada : **{row['User']}**\nSebanyak : **Rp {row['TotalNominal']:,}**"
+                        send_to_discord(pesan_bayar)
                     elif row['Tipe'] == 'AMBIL':
                         n_b, q_b = row['Detail'].split(":")
                         st.session_state.stock_bibit[n_b] -= int(q_b)
