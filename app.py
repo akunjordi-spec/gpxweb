@@ -5,117 +5,141 @@ from datetime import datetime
 import requests
 import ast
 
-st.set_page_config(page_title="GPX Game Office", layout="wide", page_icon="🏢")
+# Konfigurasi Caching agar Web Cepat
+st.set_page_config(page_title="GPX Game Office", layout="wide")
 
-# --- KONEKSI ---
 try:
     conn = st.connection("supabase", type=SupabaseConnection, 
                          url=st.secrets["SUPABASE_URL"], 
                          key=st.secrets["SUPABASE_KEY"])
     DISCORD_WEBHOOK_URL = st.secrets["MY_WEBHOOK_URL"]
 except:
-    st.error("Koneksi gagal! Cek Secrets."); st.stop()
+    st.error("Gagal koneksi database!"); st.stop()
 
-# --- LOAD DATA ---
-def load_all_data():
+# Fungsi Load Data dengan Cache (Biar gak lemot)
+@st.cache_data(ttl=10)
+def load_data(table_name):
     try:
-        m = conn.table("members_data").select("*").execute()
-        s = conn.table("stok_gudang").select("*").execute()
-        p = conn.table("price_data").select("*").execute()
-        b = conn.table("stock_data").select("*").execute() # Data Bibit
-        return m.data, s.data, p.data, b.data
+        res = conn.table(table_name).select("*").execute()
+        return res.data
     except:
-        return [], [], [], []
+        return []
 
-members_data, stok_data, price_data, bibit_data = load_all_data()
+# Ambil Data
+members = load_data("members_data")
+prices = load_data("price_data")
+stok_gdg = load_data("stok_gudang")
+bibit_gdg = load_data("stock_data")
 
-# --- MENU ---
-menu = st.sidebar.radio("Navigasi:", ["📊 Dashboard", "📝 Setoran & Bibit", "✅ Admin Approval", "💰 Pengaturan"])
+# --- SIDEBAR ---
+menu = st.sidebar.radio("Menu:", ["📊 Dashboard", "📝 Setoran & Bibit", "✅ Admin Approval", "💰 Pengaturan"])
 
-# --- DASHBOARD ---
+# --- MENU: DASHBOARD ---
 if menu == "📊 Dashboard":
-    st.title("📊 Monitoring Dashboard GPX")
+    st.title("📊 Monitoring GPX")
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("📦 Stok Hasil Panen")
-        if stok_data:
-            cols = st.columns(len(stok_data))
-            for i, it in enumerate(stok_data):
-                cols[i].metric(it['item'], f"{it['stok']:,} Unit")
+        st.subheader("📦 Stok Gudang")
+        if stok_gdg:
+            for i in stok_gdg: st.write(f"- {i['item']}: {i['stok']:,} Unit")
     with c2:
-        st.subheader("🌱 Stok Bibit Tersedia")
-        if bibit_data:
-            cols = st.columns(len(bibit_data))
-            for i, it in enumerate(bibit_data):
-                cols[i].metric(it['item'], f"{it['qty']:,} Pcs")
-
-# --- SETORAN & AMBIL BIBIT ---
-elif menu == "📝 Setoran & Bibit":
-    st.title("📝 Input Kegiatan Member")
-    m_name = st.selectbox("Pilih Member:", sorted([m['nama'] for m in members_data]))
-    tab1, tab2 = st.tabs(["🍀 Setoran Panen", "🌱 Ambil Bibit"])
+        st.subheader("🌱 Stok Bibit")
+        if bibit_gdg:
+            for i in bibit_gdg: st.write(f"- {i['item']}: {i['qty']:,} Pcs")
     
-    with tab1: # FITUR SETORAN (SUDAH ADA)
-        # ... (Logika Setoran Panen yang lama tetap ada di sini)
-        st.info("Input jumlah panen untuk disetor.")
+    st.divider()
+    st.subheader("🏆 Leaderboard (Unit Fisik)")
+    if members:
+        df_m = pd.DataFrame(members)
+        st.table(df_m[['nama', 'total_kembali', 'total_uang']].sort_values('total_kembali', ascending=False))
 
-    with tab2: # FITUR BARU: AMBIL BIBIT
-        st.subheader("Form Pengambilan Bibit")
-        if not bibit_data:
-            st.warning("Stok bibit di gudang kosong. Admin harus input stok di menu Pengaturan.")
-        else:
-            bibit_options = {b['item']: b['qty'] for b in bibit_data}
-            pilih_bibit = st.selectbox("Jenis Bibit:", list(bibit_options.keys()))
-            st.write(f"Stok Tersedia: {bibit_options[pilih_bibit]} Pcs")
-            jml_ambil = st.number_input("Jumlah Ambil:", min_value=0, max_value=bibit_options[pilih_bibit], step=1)
+# --- MENU: SETORAN & BIBIT ---
+elif menu == "📝 Setoran & Bibit":
+    st.title("📝 Input Kegiatan")
+    if not members or not prices:
+        st.warning("Isi Member & Harga di Pengaturan dulu!")
+    else:
+        m_name = st.selectbox("Pilih Member:", [m['nama'] for m in members])
+        t1, t2 = st.tabs(["🍀 Setor Panen", "🌱 Ambil Bibit"])
+        
+        with t1:
+            input_setor, total_rp, rincian = {}, 0, []
+            for p in prices:
+                q = st.number_input(f"{p['item']} (Rp{p['price']:,})", min_value=0, step=1, key=f"s_{p['item']}")
+                if q > 0:
+                    input_setor[p['item']] = q
+                    total_rp += (q * p['price'])
+                    rincian.append(f"{p['item']}: {q}")
             
-            if st.button("Kirim Laporan Bibit 🚀"):
-                if jml_ambil > 0:
-                    conn.table("pending_tasks").insert({
-                        "user_nama": m_name, "tipe": "BIBIT", 
-                        "detail": str({pilih_bibit: jml_ambil}),
-                        "total_nominal": 0, "status": "Pending"
-                    }).execute()
-                    # Discord Bot
-                    msg = f"🌱 **PENGAMBILAN BIBIT**\nMember: **{m_name}**\nBibit: {pilih_bibit}\nJumlah: **{jml_ambil} Pcs**"
-                    requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
-                    st.success("Laporan pengambilan bibit terkirim!")
+            if st.button("Kirim Setoran 🚀"):
+                if input_setor:
+                    conn.table("pending_tasks").insert({"user_nama": m_name, "tipe": "SETOR", "detail": str(input_setor), "total_nominal": total_rp}).execute()
+                    requests.post(DISCORD_WEBHOOK_URL, json={"content": f"📩 **SETORAN**: {m_name} | {rincian} | Total: Rp {total_rp:,}"})
+                    st.success("Terkirim!")
 
-# --- APPROVAL (TRACKING OTOMATIS) ---
+        with t2:
+            if bibit_gdg:
+                b_pilih = st.selectbox("Pilih Bibit:", [b['item'] for b in bibit_gdg])
+                b_qty = st.number_input("Jumlah Ambil:", min_value=0, step=1)
+                if st.button("Kirim Ambil Bibit 🚀"):
+                    conn.table("pending_tasks").insert({"user_nama": m_name, "tipe": "BIBIT", "detail": str({b_pilih: b_qty}), "total_nominal": 0}).execute()
+                    requests.post(DISCORD_WEBHOOK_URL, json={"content": f"🌱 **AMBIL BIBIT**: {m_name} | {b_pilih}: {b_qty}"})
+                    st.success("Laporan Bibit Terkirim!")
+
+# --- MENU: APPROVAL ---
 elif menu == "✅ Admin Approval":
     st.title("✅ Persetujuan Admin")
-    tasks = conn.table("pending_tasks").select("*").eq("status", "Pending").execute()
-    if not tasks.data: st.info("Antrean kosong.")
+    tasks = conn.table("pending_tasks").select("*").eq("status", "Pending").execute().data
+    if not tasks: st.info("Tidak ada antrean.")
     else:
-        for t in tasks.data:
+        for t in tasks:
             with st.expander(f"📌 {t['user_nama']} - {t['tipe']}"):
                 st.write(f"Detail: {t['detail']}")
-                if st.button("SETUJUI ✅", key=f"app_{t['id']}"):
-                    details = ast.literal_eval(t['detail'])
-                    if t['tipe'] == "BIBIT":
-                        # 1. Potong Stok Bibit Gudang
-                        for it, q in details.items():
-                            b_curr = next(b for b in bibit_data if b['item'] == it)
-                            conn.table("stock_data").update({"qty": int(b_curr['qty']) - q}).eq("item", it).execute()
-                        # 2. Catat di Member (Track total bibit yang diterima)
-                        m_curr = next(m for m in members_data if m['nama'] == t['user_nama'])
-                        conn.table("members_data").update({"total_terima": int(m_curr.get('total_terima', 0)) + sum(details.values())}).eq("nama", t['user_nama']).execute()
-                    
-                    # (Logika Approval SETORAN tetap sama seperti sebelumnya)
+                if st.button("APPROVE ✅", key=f"bt_{t['id']}"):
+                    det = ast.literal_eval(t['detail'])
+                    if t['tipe'] == "SETOR":
+                        # Update Saldo & Stok Panen
+                        m_data = next(m for m in members if m['nama'] == t['user_nama'])
+                        conn.table("members_data").update({"total_uang": m_data['total_uang'] + t['total_nominal'], "total_kembali": m_data['total_kembali'] + sum(det.values())}).eq("nama", t['user_nama']).execute()
+                        for it, q in det.items():
+                            s_data = next(s for s in stok_gdg if s['item'] == it)
+                            conn.table("stok_gudang").update({"stok": s_data['stok'] + q}).eq("item", it).execute()
+                    else:
+                        # Update Bibit
+                        for it, q in det.items():
+                            b_data = next(b for b in bibit_gdg if b['item'] == it)
+                            conn.table("stock_data").update({"qty": b_data['qty'] - q}).eq("item", it).execute()
+                            m_data = next(m for m in members if m['nama'] == t['user_nama'])
+                            conn.table("members_data").update({"total_terima": m_data.get('total_terima', 0) + q}).eq("nama", t['user_nama']).execute()
                     
                     conn.table("pending_tasks").update({"status": "Approved"}).eq("id", t['id']).execute()
-                    st.rerun()
+                    requests.post(DISCORD_WEBHOOK_URL, json={"content": f"✅ **DI-APPROVE**: {t['user_nama']} | {t['tipe']}"})
+                    st.cache_data.clear(); st.rerun()
 
-# --- PENGATURAN (INPUT STOK BIBIT) ---
+# --- MENU: PENGATURAN ---
 elif menu == "💰 Pengaturan":
     st.title("⚙️ Pengaturan")
-    tab1, tab2, tab3 = st.tabs(["Member", "Harga Panen", "Stok Bibit (Admin)"])
-    # ... (Tab Member & Harga tetap sama)
+    tab1, tab2, tab3 = st.tabs(["Member", "Harga Panen", "Stok Bibit"])
+    
+    with tab1:
+        df_m = pd.DataFrame(members) if members else pd.DataFrame(columns=['nama', 'total_uang', 'total_kembali', 'total_terima'])
+        ed_m = st.data_editor(df_m, num_rows="dynamic")
+        if st.button("Simpan Member"):
+            for _, r in ed_m.iterrows(): conn.table("members_data").upsert(r.to_dict()).execute()
+            st.cache_data.clear(); st.rerun()
+            
+    with tab2:
+        df_p = pd.DataFrame(prices) if prices else pd.DataFrame(columns=['item', 'price'])
+        ed_p = st.data_editor(df_p, num_rows="dynamic")
+        if st.button("Simpan Harga"):
+            for _, r in ed_p.iterrows(): 
+                conn.table("price_data").upsert(r.to_dict()).execute()
+                conn.table("stok_gudang").upsert({"item": r['item'], "stok": 0}).execute()
+            st.cache_data.clear(); st.rerun()
+
     with tab3:
-        st.subheader("Input Stok Bibit Baru")
-        df_b = pd.DataFrame(bibit_data) if bibit_data else pd.DataFrame(columns=['item', 'qty'])
-        ed_b = st.data_editor(df_b, num_rows="dynamic", key="ed_bibit")
-        if st.button("Simpan Stok Bibit"):
-            for _, row in ed_b.iterrows():
-                conn.table("stock_data").upsert(row.to_dict(), on_conflict="item").execute()
-            st.rerun()
+        df_b = pd.DataFrame(bibit_gdg) if bibit_gdg else pd.DataFrame(columns=['item', 'qty'])
+        ed_b = st.data_editor(df_b, num_rows="dynamic")
+        if st.button("Simpan Bibit"):
+            for _, r in ed_b.iterrows(): conn.table("stock_data").upsert(r.to_dict()).execute()
+            st.cache_data.clear(); st.rerun()
