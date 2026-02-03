@@ -1,271 +1,207 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-import os
+from st_supabase_connection import SupabaseConnection
+from datetime import datetime
 import requests
+import ast
 
 # --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Game Office Pro Manager", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Game Office Pro - Database Mode", layout="wide", page_icon="🏢")
 
-# --- 2. CONFIG DISCORD WEBHOOK (AMAN) ---
+# --- 2. KONEKSI DATABASE & WEBHOOK ---
 try:
+    # Koneksi otomatis menggunakan st.connection (mengambil dari Secrets)
+    conn = st.connection("supabase", type=SupabaseConnection)
     DISCORD_WEBHOOK_URL = st.secrets["MY_WEBHOOK_URL"]
-except:
-    st.error("⚠️ Webhook belum dikonfigurasi di Streamlit Secrets!")
-    DISCORD_WEBHOOK_URL = None
+except Exception as e:
+    st.error("⚠️ Konfigurasi Secrets tidak lengkap! Pastikan URL, Key, dan Webhook sudah diisi.")
+    st.stop()
 
+# --- 3. FUNGSI HELPER ---
 def send_to_discord(message):
     if DISCORD_WEBHOOK_URL:
         try:
-            data = {"content": message}
-            requests.post(DISCORD_WEBHOOK_URL, json=data)
-        except Exception as e:
+            requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
+        except:
             pass
 
-# --- 3. DAFTAR MEMBER DEFAULT ---
-DEFAULT_NAMES = [
-    "JOE JETZY", "REXY NUGROHO", "ALEXANDRO JETZY", "VAREL", "NOAH", 
-    "JAMAL", "BANGPOK", "KARELA", "HANS", "AMAT LINCOLN", 
-    "JOHAN CUKARDELENG", "FRANK CUKARDELENG", "MAX EL STEIN", "BIG BOS", 
-    "ARUL", "REY", "CHEONG", "VICKTOR", "MARO", "SUGGEW", "NUSA", "WAHAB", "FRIOREN"
-]
+def refresh_data():
+    m = conn.query("*", table="members_data").execute()
+    s = conn.query("*", table="stok_gudang").execute()
+    b = conn.query("*", table="stock_data").execute()
+    p = conn.query("*", table="price_data").execute()
+    return m.data, s.data, b.data, p.data
 
-# --- 4. FUNGSI DATABASE ---
-def save_all():
-    st.session_state.members.to_csv('members_data.csv', index=False)
-    pd.DataFrame(list(st.session_state.prices.items()), columns=['Item', 'Price']).to_csv('price_data.csv', index=False)
-    pd.DataFrame(list(st.session_state.stok_gudang.items()), columns=['Item', 'Stok']).to_csv('stok_gudang.csv', index=False)
-    st.session_state.pending_tasks.to_csv('pending_tasks.csv', index=False)
-    st.session_state.sales_history.to_csv('sales_history.csv', index=False)
-    pd.DataFrame(list(st.session_state.stock_bibit.items()), columns=['Item', 'Qty']).to_csv('stock_data.csv', index=False)
+# Ambil data awal
+members_data, stok_data, bibit_data, price_data = refresh_data()
 
-def load_data():
-    if os.path.exists('members_data.csv'):
-        st.session_state.members = pd.read_csv('members_data.csv')
-    else:
-        st.session_state.members = pd.DataFrame([{'Nama': n, 'Total Terima': 0, 'Total Kembali': 0, 'Total Uang': 0} for n in DEFAULT_NAMES])
-    
-    for col in ['Total Terima', 'Total Kembali', 'Total Uang']:
-        if col not in st.session_state.members.columns:
-            st.session_state.members[col] = 0
-
-    if os.path.exists('pending_tasks.csv'):
-        df_tasks = pd.read_csv('pending_tasks.csv')
-        if 'FullTimestamp' not in df_tasks.columns:
-            df_tasks['FullTimestamp'] = datetime.now()
-        st.session_state.pending_tasks = df_tasks
-    else:
-        st.session_state.pending_tasks = pd.DataFrame(columns=['ID', 'User', 'Tipe', 'Detail', 'Status', 'Waktu', 'TotalNominal', 'SisaBibit', 'FullTimestamp'])
-
-    if os.path.exists('sales_history.csv'):
-        st.session_state.sales_history = pd.read_csv('sales_history.csv')
-    else:
-        st.session_state.sales_history = pd.DataFrame(columns=['Waktu', 'Pembeli', 'Item', 'Qty', 'HargaJual', 'Total'])
-
-    if os.path.exists('price_data.csv'):
-        df_p = pd.read_csv('price_data.csv')
-        st.session_state.prices = dict(zip(df_p.Item, df_p.Price))
-    else:
-        st.session_state.prices = {"CENGKEH": 100, "AKAR": 50, "SUSU": 200, "KULIT": 150}
-
-    if os.path.exists('stok_gudang.csv'):
-        df_s = pd.read_csv('stok_gudang.csv')
-        st.session_state.stok_gudang = dict(zip(df_s.Item, df_s.Stok))
-    else:
-        st.session_state.stok_gudang = {k: 0 for k in st.session_state.prices.keys()}
-
-    if os.path.exists('stock_data.csv'):
-        df_b = pd.read_csv('stock_data.csv')
-        st.session_state.stock_bibit = dict(zip(df_b.Item, df_b.Qty))
-    else:
-        st.session_state.stock_bibit = {"BIBIT CENGKEH": 1000}
-
-if 'members' not in st.session_state:
-    load_data()
-
-# --- 5. SIDEBAR ---
+# --- 4. SIDEBAR MENU ---
 st.sidebar.title("🏢 KANTOR PUSAT")
-menu = st.sidebar.selectbox("MENU UTAMA", ["📊 Dashboard", "📝 Input Member", "✅ Approval & Bayar", "💸 Penjualan Luar", "⚙️ Stock Opname", "💰 Atur Harga & Member"])
-
-st.sidebar.write("---")
-range_view = st.sidebar.radio("Range Waktu Leaderboard:", ["Semua", "Hari Ini", "7 Hari Terakhir"])
+menu = st.sidebar.selectbox("MENU UTAMA", 
+    ["📊 Dashboard", "📝 Input Member", "✅ Approval & Bayar", "⚙️ Stock Opname", "💰 Atur Harga & Member"]
+)
 
 # --- MENU: DASHBOARD ---
 if menu == "📊 Dashboard":
-    st.title("📊 Monitoring Dashboard")
+    st.title("📊 Monitoring Dashboard (Real-time)")
     
-    df_approved = st.session_state.pending_tasks[st.session_state.pending_tasks['Status'] == 'Approved'].copy()
-    df_approved['FullTimestamp'] = pd.to_datetime(df_approved['FullTimestamp'])
-    
-    if range_view == "Hari Ini":
-        df_approved = df_approved[df_approved['FullTimestamp'].dt.date == datetime.now().date()]
-    elif range_view == "7 Hari Terakhir":
-        limit_date = datetime.now() - timedelta(days=7)
-        df_approved = df_approved[df_approved['FullTimestamp'] >= limit_date]
-
+    # Ringkasan Stok
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("🌱 Stok Bibit")
-        cols_b = st.columns(len(st.session_state.stock_bibit))
-        for i, (item, qty) in enumerate(st.session_state.stock_bibit.items()):
-            cols_b[i].metric(item, f"{qty:,} Pcs")
+        if bibit_data:
+            cols_b = st.columns(len(bibit_data))
+            for i, item in enumerate(bibit_data):
+                cols_b[i].metric(item['item'], f"{item['qty']:,} Pcs")
+            
     with c2:
         st.subheader("📦 Stok Gudang")
-        items = list(st.session_state.stok_gudang.items())
-        cols_s = st.columns(max(1, len(items)))
-        for i, (item, qty) in enumerate(items):
-            cols_s[i].metric(item, f"{qty:,}")
+        if stok_data:
+            cols_s = st.columns(len(stok_data))
+            for i, item in enumerate(stok_data):
+                cols_s[i].metric(item['item'], f"{item['stok']:,} Unit")
 
     st.write("---")
-    st.subheader(f"🏆 Leaderboard Member ({range_view})")
+    
+    # Leaderboard
+    st.subheader("🏆 Leaderboard Member")
     l1, l2 = st.columns(2)
+    df_m = pd.DataFrame(members_data)
+    
     with l1:
-        st.markdown("### ⭐ Penyetor Terbanyak (Rp)")
-        if not df_approved[df_approved['Tipe'] == 'SETOR'].empty:
-            top_setor = df_approved[df_approved['Tipe'] == 'SETOR'].groupby('User')['TotalNominal'].sum().reset_index()
-            top_setor = top_setor.sort_values(by='TotalNominal', ascending=False)
-            st.dataframe(top_setor.rename(columns={'TotalNominal': 'Total Setoran (Rp)'}), use_container_width=True, hide_index=True)
-        else: st.info("Belum ada data setoran.")
+        st.markdown("### ⭐ Penyetor Terbanyak (Unit Fisik)")
+        if not df_m.empty:
+            top_setor = df_m.nlargest(5, 'total_kembali')[['nama', 'total_kembali']]
+            st.dataframe(top_setor.rename(columns={'nama': 'Nama', 'total_kembali': 'Total Unit'}), 
+                         use_container_width=True, hide_index=True)
+            
     with l2:
         st.markdown("### 🌱 Pengambil Bibit Terbanyak")
-        if not df_approved[df_approved['Tipe'] == 'AMBIL'].empty:
-            df_ambil = df_approved[df_approved['Tipe'] == 'AMBIL'].copy()
-            df_ambil['QtyAmbil'] = df_ambil['Detail'].apply(lambda x: int(x.split(':')[1]) if ':' in x else 0)
-            top_ambil = df_ambil.groupby('User')['QtyAmbil'].sum().reset_index()
-            top_ambil = top_ambil.sort_values(by='QtyAmbil', ascending=False)
-            st.dataframe(top_ambil.rename(columns={'QtyAmbil': 'Total Bibit (Pcs)'}), use_container_width=True, hide_index=True)
-        else: st.info("Belum ada data pengambilan bibit.")
+        if not df_m.empty:
+            top_ambil = df_m.nlargest(5, 'total_terima')[['nama', 'total_terima']]
+            st.dataframe(top_ambil.rename(columns={'nama': 'Nama', 'total_terima': 'Total Bibit'}), 
+                         use_container_width=True, hide_index=True)
 
 # --- MENU: INPUT MEMBER ---
 elif menu == "📝 Input Member":
     st.title("📝 Form Input Member")
-    m_name = st.selectbox("Pilih Member", st.session_state.members['Nama'].sort_values())
+    m_name = st.selectbox("Pilih Member", sorted([m['nama'] for m in members_data]))
     t1, t2 = st.tabs(["🍀 Setoran Hasil", "🌱 Ambil Bibit"])
     
     with t1:
+        prices = {p['item']: p['price'] for p in price_data}
         cols = st.columns(3)
-        detail_setor, rincian_struk, total_nom = [], [], 0
-        for i, (item, prc) in enumerate(st.session_state.prices.items()):
-            q = cols[i % 3].number_input(f"Jumlah {item}", min_value=0, key=f"inp_{item}", step=1)
-            if q > 0:
-                detail_setor.append(f"{item}:{q}")
-                rincian_struk.append(f"{item} : {q:,}")
-                total_nom += (q * prc)
+        input_qty, total_nom, rincian_discord = {}, 0, []
         
-        sisa_b = st.number_input("Bibit Sisa yang Dikembalikan", min_value=0)
+        for i, (item, prc) in enumerate(prices.items()):
+            q = cols[i % 3].number_input(f"Jumlah {item}", min_value=0, step=1, key=f"in_{item}")
+            if q > 0:
+                input_qty[item] = q
+                total_nom += (q * prc)
+                rincian_discord.append(f"{item} : {q:,}")
+        
         if st.button("Kirim Laporan Setoran"):
-            if detail_setor:
-                new_t = pd.DataFrame([{'ID': datetime.now().timestamp(), 'User': m_name, 'Tipe': 'SETOR', 'Detail': ",".join(detail_setor), 'TotalNominal': total_nom, 'SisaBibit': sisa_b, 'Status': 'Pending', 'Waktu': datetime.now().strftime("%d/%m %H:%M"), 'FullTimestamp': datetime.now()}])
-                st.session_state.pending_tasks = pd.concat([st.session_state.pending_tasks, new_t], ignore_index=True)
-                save_all()
+            if input_qty:
+                conn.table("pending_tasks").insert({
+                    "user_nama": m_name, "tipe": "SETOR", "detail": str(input_qty),
+                    "total_nominal": total_nom, "status": "Pending"
+                }).execute()
+                
+                # Format Discord Request
                 tgl = datetime.now().strftime("%d/%m/%y")
-                pesan_discord = f"**SETORAN {tgl}**\n\n**{m_name}**\n" + "\n".join(rincian_struk) + f"\n**TOTAL : {total_nom:,}**"
-                send_to_discord(pesan_discord)
+                msg = f"**SETORAN {tgl}**\n\n**{m_name}**\n" + "\n".join(rincian_discord) + f"\n**TOTAL : {total_nom:,}**"
+                send_to_discord(msg)
                 st.success("Laporan terkirim!")
-            else: st.warning("Input barang dulu!")
+            else:
+                st.warning("Isi jumlah barang!")
 
     with t2:
-        bbt = st.selectbox("Pilih Bibit", list(st.session_state.stock_bibit.keys()))
-        jml = st.number_input("Jumlah Ambil", min_value=1, step=1)
+        bbt_item = st.selectbox("Pilih Bibit", [b['item'] for b in bibit_data])
+        jml_ambil = st.number_input("Jumlah Ambil", min_value=1, step=1)
         if st.button("Ajukan Ambil Bibit"):
-            new_t = pd.DataFrame([{'ID': datetime.now().timestamp(), 'User': m_name, 'Tipe': 'AMBIL', 'Detail': f"{bbt}:{jml}", 'TotalNominal': 0, 'SisaBibit': 0, 'Status': 'Pending', 'Waktu': datetime.now().strftime("%d/%m %H:%M"), 'FullTimestamp': datetime.now()}])
-            st.session_state.pending_tasks = pd.concat([st.session_state.pending_tasks, new_t], ignore_index=True)
-            save_all(); st.success("Permintaan Ambil Bibit terkirim!")
+            conn.table("pending_tasks").insert({
+                "user_nama": m_name, "tipe": "AMBIL", "detail": f"{bbt_item}:{jml_ambil}",
+                "total_nominal": 0, "status": "Pending"
+            }).execute()
+            st.success("Permintaan bibit dikirim!")
 
-# --- MENU: APPROVAL & BAYAR ---
+# --- MENU: APPROVAL ---
 elif menu == "✅ Approval & Bayar":
     st.title("✅ Persetujuan & Pembayaran")
-    pending = st.session_state.pending_tasks[st.session_state.pending_tasks['Status'] == 'Pending']
-    if pending.empty: st.info("Tidak ada laporan baru.")
+    res_pending = conn.query("*", table="pending_tasks").eq("status", "Pending").execute()
+    
+    if not res_pending.data:
+        st.info("Tidak ada antrean laporan.")
     else:
-        for idx, row in pending.iterrows():
-            with st.expander(f"{row['User']} - {row['Tipe']} ({row['Waktu']})"):
-                st.write(f"Detail: {row['Detail']}")
-                if st.button("BAYAR / KONFIRMASI ✅", key=f"app_{idx}"):
-                    midx = st.session_state.members[st.session_state.members['Nama'] == row['User']].index[0]
-                    if row['Tipe'] == 'SETOR':
-                        for item_data in row['Detail'].split(","):
-                            n_i, q_i = item_data.split(":")
-                            st.session_state.stok_gudang[n_i] = st.session_state.stok_gudang.get(n_i, 0) + int(q_i)
-                        st.session_state.members.at[midx, 'Total Uang'] += row['TotalNominal']
-                        send_to_discord(f"✅ **SUDAH DIBAYAR**\nKepada : **{row['User']}**\nSebanyak : **Rp {row['TotalNominal']:,}**")
-                    elif row['Tipe'] == 'AMBIL':
-                        n_b, q_b = row['Detail'].split(":")
-                        st.session_state.stock_bibit[n_b] -= int(q_b)
-                        st.session_state.members.at[midx, 'Total Terima'] += int(q_b)
-                        send_to_discord(f"🌱 **BIBIT DIAMBIL:** {row['User']} mengambil {q_b} pcs {n_b}")
-                    st.session_state.pending_tasks.at[idx, 'Status'] = 'Approved'
-                    save_all(); st.rerun()
+        for task in res_pending.data:
+            with st.expander(f"{task['user_nama']} - {task['tipe']}"):
+                st.write(f"Detail: {task['detail']}")
+                if st.button("KONFIRMASI ✅", key=f"btn_{task['id']}"):
+                    if task['tipe'] == "SETOR":
+                        # Gunakan literal_eval agar aman mengubah string dict ke dict
+                        details = ast.literal_eval(task['detail'])
+                        total_fisik = sum(details.values())
+                        
+                        m_curr = next(m for m in members_data if m['nama'] == task['user_nama'])
+                        conn.table("members_data").update({
+                            "total_uang": m_curr['total_uang'] + task['total_nominal'],
+                            "total_kembali": m_curr['total_kembali'] + total_fisik
+                        }).eq("nama", task['user_nama']).execute()
+                        
+                        for it, qty in details.items():
+                            s_curr = next(s for s in stok_data if s['item'] == it)
+                            conn.table("stok_gudang").update({"stok": s_curr['stok'] + qty}).eq("item", it).execute()
+                        
+                        send_to_discord(f"✅ **DIBAYAR:** {task['user_nama']} senilai Rp {task['total_nominal']:,}")
 
-# --- MENU: PENJUALAN ---
-elif menu == "💸 Penjualan Luar":
-    st.title("💸 Jual ke NPC")
-    with st.form("jual_npc"):
-        item_j = st.selectbox("Barang", list(st.session_state.stok_gudang.keys()))
-        qty_j = st.number_input("Jumlah", min_value=1)
-        prc_j = st.number_input("Harga Satuan", min_value=0)
-        if st.form_submit_button("Jual"):
-            if st.session_state.stok_gudang[item_j] >= qty_j:
-                st.session_state.stok_gudang[item_j] -= qty_j
-                total = qty_j * prc_j
-                new_s = pd.DataFrame([{'Waktu': datetime.now().strftime("%d/%m %H:%M"), 'Pembeli': 'NPC', 'Item': item_j, 'Qty': qty_j, 'HargaJual': prc_j, 'Total': total}])
-                st.session_state.sales_history = pd.concat([st.session_state.sales_history, new_s], ignore_index=True)
-                save_all(); st.success("Terjual!"); st.rerun()
+                    elif task['tipe'] == "AMBIL":
+                        it_b, qty_b = task['detail'].split(":")
+                        qty_b = int(qty_b)
+                        m_curr = next(m for m in members_data if m['nama'] == task['user_nama'])
+                        conn.table("members_data").update({"total_terima": m_curr['total_terima'] + qty_b}).eq("nama", task['user_nama']).execute()
+                        b_curr = next(b for b in bibit_data if b['item'] == it_b)
+                        conn.table("stock_data").update({"qty": b_curr['qty'] - qty_b}).eq("item", it_b).execute()
+
+                    conn.table("pending_tasks").update({"status": "Approved"}).eq("id", task['id']).execute()
+                    st.rerun()
 
 # --- MENU: STOCK OPNAME ---
 elif menu == "⚙️ Stock Opname":
-    st.title("⚙️ Koreksi Stok")
-    tab1, tab2 = st.tabs(["📦 Stok Barang", "🌱 Stok Bibit"])
-    with tab1:
-        if st.session_state.stok_gudang:
-            i_so = st.selectbox("Pilih Barang", list(st.session_state.stok_gudang.keys()), key="so_brg")
-            q_so = st.number_input("Jumlah Sebenarnya", value=st.session_state.stok_gudang[i_so], key="so_brg_val")
-            if st.button("Update Stok Barang"):
-                st.session_state.stok_gudang[i_so] = q_so
-                save_all(); st.rerun()
-    with tab2:
-        if st.session_state.stock_bibit:
-            b_so = st.selectbox("Pilih Bibit", list(st.session_state.stock_bibit.keys()), key="so_bbt")
-            qb_so = st.number_input("Jumlah Sebenarnya", value=st.session_state.stock_bibit[b_so], key="so_bbt_val")
-            if st.button("Update Stok Bibit"):
-                st.session_state.stock_bibit[b_so] = qb_so
-                save_all(); st.rerun()
+    st.title("⚙️ Koreksi Stok (Admin)")
+    tab_s, tab_b = st.tabs(["📦 Stok Barang", "🌱 Stok Bibit"])
+    with tab_s:
+        item_sel = st.selectbox("Pilih Barang", [s['item'] for s in stok_data])
+        qty_new = st.number_input("Stok Baru", min_value=0)
+        if st.button("Update Stok Gudang"):
+            conn.table("stok_gudang").update({"stok": qty_new}).eq("item", item_sel).execute()
+            st.success("Stok diperbarui!"); st.rerun()
+    with tab_b:
+        bibit_sel = st.selectbox("Pilih Bibit", [b['item'] for b in bibit_data])
+        qty_b_new = st.number_input("Stok Bibit Baru", min_value=0)
+        if st.button("Update Stok Bibit"):
+            conn.table("stock_data").update({"qty": qty_b_new}).eq("item", bibit_sel).execute()
+            st.success("Stok bibit diperbarui!"); st.rerun()
 
-# --- MENU: PENGATURAN HARGA & MEMBER (UPDATE) ---
+# --- MENU: ATUR HARGA & MEMBER ---
 elif menu == "💰 Atur Harga & Member":
-    st.title("⚙️ Pengaturan Kantor")
-    t1, t2 = st.tabs(["💰 Daftar Harga & Barang", "👥 Manajemen Member"])
-    
+    st.title("⚙️ Pengaturan Database")
+    t1, t2 = st.tabs(["💰 Harga & Barang", "👥 Member"])
     with t1:
-        st.subheader("📊 Harga Beli Kantor Saat Ini")
-        # Menampilkan tabel harga yang sedang aktif
-        df_prices = pd.DataFrame(list(st.session_state.prices.items()), columns=['Nama Barang', 'Harga Beli (Rp)'])
-        st.dataframe(df_prices.sort_values(by='Nama Barang'), use_container_width=True, hide_index=True)
-        
-        st.write("---")
-        st.subheader("➕ Tambah / Edit Barang")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            n_b = st.text_input("Nama Barang (Contoh: DAUN)").upper()
-        with col_b:
-            h_b = st.number_input("Harga Beli Baru", min_value=0, step=1)
-        
-        if st.button("Simpan Barang/Harga"):
-            if n_b:
-                st.session_state.prices[n_b] = h_b
-                if n_b not in st.session_state.stok_gudang:
-                    st.session_state.stok_gudang[n_b] = 0
-                save_all()
-                st.success(f"Berhasil menyimpan {n_b} dengan harga Rp {h_b:,}")
+        st.subheader("Inventory & Harga Beli")
+        st.dataframe(pd.DataFrame(price_data), use_container_width=True, hide_index=True)
+        with st.form("add_item"):
+            n_item = st.text_input("Nama Barang Baru (Contoh: DAUN)").upper()
+            h_item = st.number_input("Harga Beli (Rp)", min_value=0)
+            if st.form_submit_button("Simpan Barang"):
+                conn.table("price_data").upsert({"item": n_item, "price": h_item}).execute()
+                conn.table("stok_gudang").upsert({"item": n_item, "stok": 0}).execute()
                 st.rerun()
-            else:
-                st.warning("Nama barang tidak boleh kosong!")
-
     with t2:
-        st.subheader("👥 Daftar Member Terdaftar")
-        edited = st.data_editor(st.session_state.members, use_container_width=True, num_rows="dynamic")
+        st.subheader("Manajemen Member")
+        edited_m = st.data_editor(pd.DataFrame(members_data), num_rows="dynamic", use_container_width=True)
         if st.button("Simpan Perubahan Member"):
-            st.session_state.members = edited
-            save_all()
-            st.success("Data member berhasil diperbarui!")
-            st.rerun()
+            for _, row in edited_m.iterrows():
+                # Hapus ID agar tidak konflik saat upsert jika id kosong
+                d = row.to_dict()
+                conn.table("members_data").upsert(d).execute()
+            st.success("Data Member Diperbarui!"); st.rerun()
