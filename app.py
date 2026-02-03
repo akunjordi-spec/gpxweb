@@ -119,16 +119,13 @@ if menu == "📊 Dashboard":
     st.write("---")
     st.subheader(f"🏆 Leaderboard Member ({range_view})")
     l1, l2 = st.columns(2)
-    
     with l1:
         st.markdown("### ⭐ Penyetor Terbanyak (Rp)")
         if not df_approved[df_approved['Tipe'] == 'SETOR'].empty:
             top_setor = df_approved[df_approved['Tipe'] == 'SETOR'].groupby('User')['TotalNominal'].sum().reset_index()
             top_setor = top_setor.sort_values(by='TotalNominal', ascending=False)
             st.dataframe(top_setor.rename(columns={'TotalNominal': 'Total Setoran (Rp)'}), use_container_width=True, hide_index=True)
-        else:
-            st.info("Belum ada data setoran.")
-
+        else: st.info("Belum ada data setoran.")
     with l2:
         st.markdown("### 🌱 Pengambil Bibit Terbanyak")
         if not df_approved[df_approved['Tipe'] == 'AMBIL'].empty:
@@ -137,8 +134,7 @@ if menu == "📊 Dashboard":
             top_ambil = df_ambil.groupby('User')['QtyAmbil'].sum().reset_index()
             top_ambil = top_ambil.sort_values(by='QtyAmbil', ascending=False)
             st.dataframe(top_ambil.rename(columns={'QtyAmbil': 'Total Bibit (Pcs)'}), use_container_width=True, hide_index=True)
-        else:
-            st.info("Belum ada data pengambilan bibit.")
+        else: st.info("Belum ada data pengambilan bibit.")
 
 # --- MENU: INPUT MEMBER ---
 elif menu == "📝 Input Member":
@@ -162,17 +158,10 @@ elif menu == "📝 Input Member":
                 new_t = pd.DataFrame([{'ID': datetime.now().timestamp(), 'User': m_name, 'Tipe': 'SETOR', 'Detail': ",".join(detail_setor), 'TotalNominal': total_nom, 'SisaBibit': sisa_b, 'Status': 'Pending', 'Waktu': datetime.now().strftime("%d/%m %H:%M"), 'FullTimestamp': datetime.now()}])
                 st.session_state.pending_tasks = pd.concat([st.session_state.pending_tasks, new_t], ignore_index=True)
                 save_all()
-                
-                # FORMAT PESAN SESUAI PERMINTAAN
                 tgl = datetime.now().strftime("%d/%m/%y")
-                pesan_discord = f"**SETORAN {tgl}**\n\n"
-                pesan_discord += f"**{m_name}**\n"
-                pesan_discord += "\n".join(rincian_struk) + "\n"
-                pesan_discord += f"**TOTAL : {total_nom:,}**"
-                
+                pesan_discord = f"**SETORAN {tgl}**\n\n**{m_name}**\n" + "\n".join(rincian_struk) + f"\n**TOTAL : {total_nom:,}**"
                 send_to_discord(pesan_discord)
                 st.success("Laporan terkirim!")
-                st.code(pesan_discord, language="text")
             else: st.warning("Input barang dulu!")
 
     with t2:
@@ -187,9 +176,7 @@ elif menu == "📝 Input Member":
 elif menu == "✅ Approval & Bayar":
     st.title("✅ Persetujuan & Pembayaran")
     pending = st.session_state.pending_tasks[st.session_state.pending_tasks['Status'] == 'Pending']
-    
-    if pending.empty:
-        st.info("Tidak ada laporan baru.")
+    if pending.empty: st.info("Tidak ada laporan baru.")
     else:
         for idx, row in pending.iterrows():
             with st.expander(f"{row['User']} - {row['Tipe']} ({row['Waktu']})"):
@@ -201,19 +188,16 @@ elif menu == "✅ Approval & Bayar":
                             n_i, q_i = item_data.split(":")
                             st.session_state.stok_gudang[n_i] = st.session_state.stok_gudang.get(n_i, 0) + int(q_i)
                         st.session_state.members.at[midx, 'Total Uang'] += row['TotalNominal']
-                        
-                        pesan_bayar = f"✅ **SUDAH DIBAYAR**\nKepada : **{row['User']}**\nSebanyak : **Rp {row['TotalNominal']:,}**"
-                        send_to_discord(pesan_bayar)
+                        send_to_discord(f"✅ **SUDAH DIBAYAR**\nKepada : **{row['User']}**\nSebanyak : **Rp {row['TotalNominal']:,}**")
                     elif row['Tipe'] == 'AMBIL':
                         n_b, q_b = row['Detail'].split(":")
                         st.session_state.stock_bibit[n_b] -= int(q_b)
                         st.session_state.members.at[midx, 'Total Terima'] += int(q_b)
                         send_to_discord(f"🌱 **BIBIT DIAMBIL:** {row['User']} mengambil {q_b} pcs {n_b}")
-                    
                     st.session_state.pending_tasks.at[idx, 'Status'] = 'Approved'
                     save_all(); st.rerun()
 
-# --- MENU LAINNYA ---
+# --- MENU: PENJUALAN ---
 elif menu == "💸 Penjualan Luar":
     st.title("💸 Jual ke NPC")
     with st.form("jual_npc"):
@@ -228,6 +212,7 @@ elif menu == "💸 Penjualan Luar":
                 st.session_state.sales_history = pd.concat([st.session_state.sales_history, new_s], ignore_index=True)
                 save_all(); st.success("Terjual!"); st.rerun()
 
+# --- MENU: STOCK OPNAME ---
 elif menu == "⚙️ Stock Opname":
     st.title("⚙️ Koreksi Stok")
     tab1, tab2 = st.tabs(["📦 Stok Barang", "🌱 Stok Bibit"])
@@ -246,17 +231,41 @@ elif menu == "⚙️ Stock Opname":
                 st.session_state.stock_bibit[b_so] = qb_so
                 save_all(); st.rerun()
 
+# --- MENU: PENGATURAN HARGA & MEMBER (UPDATE) ---
 elif menu == "💰 Atur Harga & Member":
-    st.title("⚙️ Pengaturan")
-    t1, t2 = st.tabs(["Harga", "Member"])
+    st.title("⚙️ Pengaturan Kantor")
+    t1, t2 = st.tabs(["💰 Daftar Harga & Barang", "👥 Manajemen Member"])
+    
     with t1:
-        n_b = st.text_input("Nama Barang Baru").upper()
-        h_b = st.number_input("Harga", min_value=0)
-        if st.button("Tambah"):
-            st.session_state.prices[n_b] = h_b
-            st.session_state.stok_gudang[n_b] = 0
-            save_all(); st.rerun()
+        st.subheader("📊 Harga Beli Kantor Saat Ini")
+        # Menampilkan tabel harga yang sedang aktif
+        df_prices = pd.DataFrame(list(st.session_state.prices.items()), columns=['Nama Barang', 'Harga Beli (Rp)'])
+        st.dataframe(df_prices.sort_values(by='Nama Barang'), use_container_width=True, hide_index=True)
+        
+        st.write("---")
+        st.subheader("➕ Tambah / Edit Barang")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            n_b = st.text_input("Nama Barang (Contoh: DAUN)").upper()
+        with col_b:
+            h_b = st.number_input("Harga Beli Baru", min_value=0, step=1)
+        
+        if st.button("Simpan Barang/Harga"):
+            if n_b:
+                st.session_state.prices[n_b] = h_b
+                if n_b not in st.session_state.stok_gudang:
+                    st.session_state.stok_gudang[n_b] = 0
+                save_all()
+                st.success(f"Berhasil menyimpan {n_b} dengan harga Rp {h_b:,}")
+                st.rerun()
+            else:
+                st.warning("Nama barang tidak boleh kosong!")
+
     with t2:
+        st.subheader("👥 Daftar Member Terdaftar")
         edited = st.data_editor(st.session_state.members, use_container_width=True, num_rows="dynamic")
-        if st.button("Simpan Member"):
-            st.session_state.members = edited; save_all(); st.success("Tersimpan!")
+        if st.button("Simpan Perubahan Member"):
+            st.session_state.members = edited
+            save_all()
+            st.success("Data member berhasil diperbarui!")
+            st.rerun()
