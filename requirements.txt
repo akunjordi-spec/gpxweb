@@ -2,3 +2,4 @@ streamlit>=1.35.0
 pandas
 altair>=5.0.0
 requests
+st-supabase-connection
