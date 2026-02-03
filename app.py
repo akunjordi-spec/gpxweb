@@ -7,15 +7,21 @@ import requests
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Game Office Pro Manager", layout="wide", page_icon="🏢")
 
-# --- 2. CONFIG DISCORD WEBHOOK ---
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1468099495618154678/Po4YOGpepU260wlm7Tk5ZGwTYnId-l7zHzYVwgFQklmmKGs363e5y2yw_xrtDlxds7wC"
+# --- 2. CONFIG DISCORD WEBHOOK (AMAN) ---
+# Pastikan sudah setting di Streamlit Cloud Settings > Secrets
+try:
+    DISCORD_WEBHOOK_URL = st.secrets["MY_WEBHOOK_URL"]
+except:
+    st.error("⚠️ Webhook belum dikonfigurasi di Streamlit Secrets!")
+    DISCORD_WEBHOOK_URL = None
 
 def send_to_discord(message):
-    try:
-        data = {"content": message}
-        requests.post(DISCORD_WEBHOOK_URL, json=data)
-    except Exception as e:
-        pass
+    if DISCORD_WEBHOOK_URL:
+        try:
+            data = {"content": message}
+            requests.post(DISCORD_WEBHOOK_URL, json=data)
+        except Exception as e:
+            pass
 
 # --- 3. DAFTAR MEMBER DEFAULT ---
 DEFAULT_NAMES = [
@@ -46,7 +52,6 @@ def load_data():
 
     if os.path.exists('pending_tasks.csv'):
         df_tasks = pd.read_csv('pending_tasks.csv')
-        # Pastikan kolom Tanggal murni ada untuk filter
         if 'FullTimestamp' not in df_tasks.columns:
             df_tasks['FullTimestamp'] = datetime.now()
         st.session_state.pending_tasks = df_tasks
@@ -83,7 +88,6 @@ if 'members' not in st.session_state:
 st.sidebar.title("🏢 KANTOR PUSAT")
 menu = st.sidebar.selectbox("MENU UTAMA", ["📊 Dashboard", "📝 Input Member", "✅ Approval & Bayar", "💸 Penjualan Luar", "⚙️ Stock Opname", "💰 Atur Harga & Member"])
 
-# Filter Waktu untuk Dashboard
 st.sidebar.write("---")
 range_view = st.sidebar.radio("Range Waktu Leaderboard:", ["Semua", "Hari Ini", "7 Hari Terakhir"])
 
@@ -91,7 +95,6 @@ range_view = st.sidebar.radio("Range Waktu Leaderboard:", ["Semua", "Hari Ini", 
 if menu == "📊 Dashboard":
     st.title("📊 Monitoring Dashboard")
     
-    # Filter Data berdasarkan waktu
     df_approved = st.session_state.pending_tasks[st.session_state.pending_tasks['Status'] == 'Approved'].copy()
     df_approved['FullTimestamp'] = pd.to_datetime(df_approved['FullTimestamp'])
     
@@ -101,7 +104,6 @@ if menu == "📊 Dashboard":
         limit_date = datetime.now() - timedelta(days=7)
         df_approved = df_approved[df_approved['FullTimestamp'] >= limit_date]
 
-    # ROW 1: STOK
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("🌱 Stok Bibit")
@@ -110,14 +112,12 @@ if menu == "📊 Dashboard":
             cols_b[i].metric(item, f"{qty:,} Pcs")
     with c2:
         st.subheader("📦 Stok Gudang")
-        cols_s = st.columns(2)
         items = list(st.session_state.stok_gudang.items())
-        for i in range(min(2, len(items))):
-            cols_s[i].metric(items[i][0], f"{items[i][1]:,}")
+        cols_s = st.columns(max(1, len(items)))
+        for i, (item, qty) in enumerate(items):
+            cols_s[i].metric(item, f"{qty:,}")
 
     st.write("---")
-    
-    # ROW 2: LEADERBOARD
     st.subheader(f"🏆 Leaderboard Member ({range_view})")
     l1, l2 = st.columns(2)
     
@@ -133,7 +133,6 @@ if menu == "📊 Dashboard":
     with l2:
         st.markdown("### 🌱 Pengambil Bibit Terbanyak")
         if not df_approved[df_approved['Tipe'] == 'AMBIL'].empty:
-            # Ekstrak jumlah dari detail 'BIBIT:QTY'
             df_ambil = df_approved[df_approved['Tipe'] == 'AMBIL'].copy()
             df_ambil['QtyAmbil'] = df_ambil['Detail'].apply(lambda x: int(x.split(':')[1]) if ':' in x else 0)
             top_ambil = df_ambil.groupby('User')['QtyAmbil'].sum().reset_index()
@@ -143,7 +142,6 @@ if menu == "📊 Dashboard":
             st.info("Belum ada data pengambilan bibit.")
 
     st.write("---")
-    # Info Saldo Total (Tetap muncul)
     st.subheader("💰 Total Saldo Tersimpan")
     st.dataframe(st.session_state.members[['Nama', 'Total Uang']].sort_values(by="Total Uang", ascending=False), use_container_width=True, hide_index=True)
 
@@ -212,7 +210,6 @@ elif menu == "✅ Approval & Bayar":
 # --- MENU LAINNYA ---
 elif menu == "💸 Penjualan Luar":
     st.title("💸 Jual ke NPC")
-    # ... (Logika penjualan tetap sama seperti sebelumnya)
     with st.form("jual_npc"):
         item_j = st.selectbox("Barang", list(st.session_state.stok_gudang.keys()))
         qty_j = st.number_input("Jumlah", min_value=1)
@@ -229,21 +226,22 @@ elif menu == "⚙️ Stock Opname":
     st.title("⚙️ Koreksi Stok")
     tab1, tab2 = st.tabs(["📦 Stok Barang", "🌱 Stok Bibit"])
     with tab1:
-        i_so = st.selectbox("Pilih Barang", list(st.session_state.stok_gudang.keys()), key="so_brg")
-        q_so = st.number_input("Jumlah Sebenarnya", value=st.session_state.stok_gudang[i_so], key="so_brg_val")
-        if st.button("Update Stok Barang"):
-            st.session_state.stok_gudang[i_so] = q_so
-            save_all(); st.rerun()
+        if st.session_state.stok_gudang:
+            i_so = st.selectbox("Pilih Barang", list(st.session_state.stok_gudang.keys()), key="so_brg")
+            q_so = st.number_input("Jumlah Sebenarnya", value=st.session_state.stok_gudang[i_so], key="so_brg_val")
+            if st.button("Update Stok Barang"):
+                st.session_state.stok_gudang[i_so] = q_so
+                save_all(); st.rerun()
     with tab2:
-        b_so = st.selectbox("Pilih Bibit", list(st.session_state.stock_bibit.keys()), key="so_bbt")
-        qb_so = st.number_input("Jumlah Sebenarnya", value=st.session_state.stock_bibit[b_so], key="so_bbt_val")
-        if st.button("Update Stok Bibit"):
-            st.session_state.stock_bibit[b_so] = qb_so
-            save_all(); st.rerun()
+        if st.session_state.stock_bibit:
+            b_so = st.selectbox("Pilih Bibit", list(st.session_state.stock_bibit.keys()), key="so_bbt")
+            qb_so = st.number_input("Jumlah Sebenarnya", value=st.session_state.stock_bibit[b_so], key="so_bbt_val")
+            if st.button("Update Stok Bibit"):
+                st.session_state.stock_bibit[b_so] = qb_so
+                save_all(); st.rerun()
 
 elif menu == "💰 Atur Harga & Member":
     st.title("⚙️ Pengaturan")
-    # ... (Logika pengaturan tetap sama)
     t1, t2 = st.tabs(["Harga", "Member"])
     with t1:
         n_b = st.text_input("Nama Barang Baru").upper()
