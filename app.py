@@ -10,7 +10,7 @@ st.set_page_config(page_title="GPX Game Office", layout="wide", page_icon="🏢"
 
 # --- 2. KONEKSI DATABASE ---
 try:
-    # Koneksi menggunakan URL & Key langsung dari secrets untuk hindari error 'Not Provided'
+    # Memastikan koneksi menggunakan key yang benar dari Secrets
     conn = st.connection(
         "supabase",
         type=SupabaseConnection,
@@ -30,14 +30,20 @@ def send_to_discord(message):
         pass
 
 def load_all_data():
-    m = conn.query("*", table="members_data").execute()
-    s = conn.query("*", table="stok_gudang").execute()
-    b = conn.query("*", table="stock_data").execute()
-    p = conn.query("*", table="price_data").execute()
+    # Perbaikan sintaks query untuk library terbaru
+    m = conn.table("members_data").select("*").execute()
+    s = conn.table("stok_gudang").select("*").execute()
+    b = conn.table("stock_data").select("*").execute()
+    p = conn.table("price_data").select("*").execute()
     return m.data, s.data, b.data, p.data
 
 # Inisialisasi Data
-members_data, stok_data, bibit_data, price_data = load_all_data()
+try:
+    members_data, stok_data, bibit_data, price_data = load_all_data()
+except Exception as e:
+    st.error(f"❌ Error mengambil data dari tabel: {e}")
+    st.info("Pastikan tabel sudah dibuat di SQL Editor Supabase.")
+    st.stop()
 
 # --- 4. SIDEBAR ---
 st.sidebar.title("🏢 MENU NAVIGASI")
@@ -47,7 +53,6 @@ menu = st.sidebar.radio("Pilih Menu:", ["📊 Dashboard", "📝 Setoran & Bibit"
 if menu == "📊 Dashboard":
     st.title("📊 Monitoring Dashboard GPX")
     
-    # Baris Atas: Stok
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("📦 Stok Gudang")
@@ -63,32 +68,25 @@ if menu == "📊 Dashboard":
                 cols[i].metric(item['item'], f"{item['qty']:,}")
 
     st.divider()
-
-    # Leaderboard Berdasarkan Unit Fisik (Penyetor Terajin)
     st.subheader("🏆 Leaderboard Penyetor Terajin (Unit Fisik)")
     df_m = pd.DataFrame(members_data)
     if not df_m.empty:
-        # Sort berdasarkan total_kembali
         top_phys = df_m.nlargest(10, 'total_kembali')[['nama', 'total_kembali', 'total_uang']]
         st.table(top_phys.rename(columns={'nama': 'Nama Member', 'total_kembali': 'Total Unit Disetor', 'total_uang': 'Saldo Rp'}))
 
 # --- MENU: SETORAN & BIBIT ---
 elif menu == "📝 Setoran & Bibit":
     st.title("📝 Input Kegiatan Member")
-    m_name = st.selectbox("Pilih Nama Member:", sorted([m['nama'] for m in members_data]))
+    m_name = st.selectbox("Pilih Nama Member:", sorted([m['nama'] for m in members_data]) if members_data else ["Belum ada member"])
     
     tab1, tab2 = st.tabs(["🍀 Setoran Hasil Panen", "🌱 Pengambilan Bibit"])
     
     with tab1:
-        st.write("Masukkan jumlah barang yang disetor:")
         prices = {p['item']: p['price'] for p in price_data}
-        input_data = {}
-        total_rp = 0
-        rincian_msg = []
-        
+        input_data, total_rp, rincian_msg = {}, 0, []
         cols = st.columns(3)
         for i, (item, harga) in enumerate(prices.items()):
-            qty = cols[i % 3].number_input(f"{item} (Rp{harga:,})", min_value=0, step=1)
+            qty = cols[i % 3].number_input(f"{item} (Rp{harga:,})", min_value=0, step=1, key=f"setor_{item}")
             if qty > 0:
                 input_data[item] = qty
                 total_rp += (qty * harga)
@@ -100,47 +98,42 @@ elif menu == "📝 Setoran & Bibit":
                     "user_nama": m_name, "tipe": "SETOR", "detail": str(input_data),
                     "total_nominal": total_rp, "status": "Pending"
                 }).execute()
-                
-                # Format Discord Sesuai Request
                 tgl = datetime.now().strftime("%d/%m/%y")
                 msg = f"**SETORAN {tgl}**\n\n**{m_name}**\n" + "\n".join(rincian_msg) + f"\n**TOTAL : {total_rp:,}**"
                 send_to_discord(msg)
-                st.success("Laporan terkirim! Menunggu Approval Admin.")
-            else:
-                st.warning("Isi jumlah barang dulu!")
+                st.success("Terkirim! Menunggu konfirmasi.")
+            else: st.warning("Isi jumlah barang!")
 
     with tab2:
-        b_item = st.selectbox("Pilih Jenis Bibit:", [b['item'] for b in bibit_data])
+        b_item = st.selectbox("Pilih Jenis Bibit:", [b['item'] for b in bibit_data] if bibit_data else ["Kosong"])
         b_qty = st.number_input("Jumlah Ambil:", min_value=1, step=1)
         if st.button("Ajukan Ambil Bibit 🌱"):
             conn.table("pending_tasks").insert({
                 "user_nama": m_name, "tipe": "AMBIL", "detail": f"{b_item}:{b_qty}",
                 "total_nominal": 0, "status": "Pending"
             }).execute()
-            st.success("Permintaan bibit dikirim!")
+            st.success("Permintaan dikirim!")
 
 # --- MENU: ADMIN APPROVAL ---
 elif menu == "✅ Admin Approval":
     st.title("✅ Persetujuan Admin")
-    tasks = conn.query("*", table="pending_tasks").eq("status", "Pending").execute()
+    tasks = conn.table("pending_tasks").select("*").eq("status", "Pending").execute()
     
     if not tasks.data:
-        st.info("Semua laporan sudah diproses.")
+        st.info("Tidak ada laporan baru.")
     else:
         for t in tasks.data:
             with st.expander(f"📌 {t['user_nama']} - {t['tipe']} - Rp{t['total_nominal']:,}"):
                 st.write(f"Rincian: {t['detail']}")
-                if st.button("SETUJUI & UPDATE DATA", key=f"app_{t['id']}"):
+                if st.button("KONFIRMASI ✅", key=f"app_{t['id']}"):
                     if t['tipe'] == "SETOR":
                         details = ast.literal_eval(t['detail'])
-                        total_unit = sum(details.values())
-                        # Update Member (Saldo & Leaderboard Fisik)
+                        # Update Member & Stok
                         m_curr = next(m for m in members_data if m['nama'] == t['user_nama'])
                         conn.table("members_data").update({
                             "total_uang": int(m_curr['total_uang']) + int(t['total_nominal']),
-                            "total_kembali": int(m_curr['total_kembali']) + total_unit
+                            "total_kembali": int(m_curr['total_kembali']) + sum(details.values())
                         }).eq("nama", t['user_nama']).execute()
-                        # Update Stok Gudang
                         for it, q in details.items():
                             s_curr = next(s for s in stok_data if s['item'] == it)
                             conn.table("stok_gudang").update({"stok": int(s_curr['stok']) + q}).eq("item", it).execute()
@@ -154,27 +147,22 @@ elif menu == "✅ Admin Approval":
                         conn.table("stock_data").update({"qty": int(b_curr['qty']) - int(q_b)}).eq("item", it_b).execute()
 
                     conn.table("pending_tasks").update({"status": "Approved"}).eq("id", t['id']).execute()
-                    st.success("Data berhasil diupdate!"); st.rerun()
+                    st.rerun()
 
 # --- MENU: PENGATURAN ---
 elif menu == "💰 Pengaturan":
-    st.title("⚙️ Pengaturan Database")
-    t1, t2 = st.tabs(["👥 Member", "💵 Harga & Barang"])
-    
+    st.title("⚙️ Pengaturan")
+    t1, t2 = st.tabs(["👥 Member", "💵 Harga"])
     with t1:
-        st.subheader("Manajemen Member")
         df_edit = st.data_editor(pd.DataFrame(members_data), num_rows="dynamic")
-        if st.button("Simpan Data Member"):
+        if st.button("Update Member"):
             for _, row in df_edit.iterrows():
                 conn.table("members_data").upsert(row.to_dict()).execute()
-            st.success("Member diperbarui!"); st.rerun()
-            
+            st.rerun()
     with t2:
-        st.subheader("Harga Beli Barang")
         df_p = st.data_editor(pd.DataFrame(price_data), num_rows="dynamic")
-        if st.button("Simpan Harga"):
+        if st.button("Update Harga"):
             for _, row in df_p.iterrows():
                 conn.table("price_data").upsert(row.to_dict()).execute()
-                # Pastikan barang ada di stok_gudang
                 conn.table("stok_gudang").upsert({"item": row['item'], "stok": 0}, on_conflict="item").execute()
-            st.success("Harga & Gudang diperbarui!"); st.rerun()
+            st.rerun()
